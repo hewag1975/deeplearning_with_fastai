@@ -1,0 +1,168 @@
+---
+title: Introduction
+jupyter: python3
+---
+
+
+
+This notebook is based on lesson 1 ["Is it a bird?"](https://www.kaggle.com/code/jhoward/is-it-a-bird-creating-a-model-from-your-own-data) from fast.ai's course "Practical Deep Lerning for Coders".
+
+The basic steps for image classification are:
+
+1. Use DuckDuckGo to search for images of two categories (birds and forest, cat and dog, ...)
+2. Fine-tune a pre-trained neural network to recognise these two groups
+3. Try running this model on a random picture of one category and see if it works.
+
+```{python}
+#| _kg_hide-input: true
+#| _kg_hide-output: true
+#| execution: {iopub.execute_input: '2023-06-21T08:16:37.044087Z', iopub.status.busy: '2023-06-21T08:16:37.042487Z', iopub.status.idle: '2023-06-21T08:17:01.464485Z', shell.execute_reply: '2023-06-21T08:17:01.463665Z', shell.execute_reply.started: '2023-06-21T08:03:07.950218Z'}
+#| papermill: {duration: 24.443015, end_time: '2023-06-21T08:17:01.464699', exception: false, start_time: '2023-06-21T08:16:37.021684', status: completed}
+#| tags: []
+import os
+iskaggle = os.environ.get('KAGGLE_KERNEL_RUN_TYPE', '')
+
+if iskaggle:
+    !pip install -Uqq fastai duckduckgo_search 
+```
+
+## Step 1: Download images 
+
+```{python}
+#| _kg_hide-input: true
+#| execution: {iopub.execute_input: '2023-06-21T08:17:01.544090Z', iopub.status.busy: '2023-06-21T08:17:01.543105Z', iopub.status.idle: '2023-06-21T08:17:04.475822Z', shell.execute_reply: '2023-06-21T08:17:04.475159Z', shell.execute_reply.started: '2023-06-21T08:03:32.597286Z'}
+#| papermill: {duration: 2.956702, end_time: '2023-06-21T08:17:04.475961', exception: false, start_time: '2023-06-21T08:17:01.519259', status: completed}
+#| tags: []
+from duckduckgo_search import ddg_images
+from fastcore.all import *
+from fastdownload import download_url
+from fastai.vision.all import *
+from time import sleep
+
+def search_images(term, max_images=30):
+    print(f"Searching for '{term}'")
+    return L(ddg_images(term, max_results=max_images)).itemgot('image')
+
+categories = 'cannabis', 'rose'
+suffix = 'photo'
+path = Path('downloads')
+```
+
+```{python}
+#| execution: {iopub.execute_input: '2023-06-21T08:17:04.517631Z', iopub.status.busy: '2023-06-21T08:17:04.516407Z', iopub.status.idle: '2023-06-21T08:17:05.489209Z', shell.execute_reply: '2023-06-21T08:17:05.490100Z', shell.execute_reply.started: '2023-06-21T08:03:35.575225Z'}
+#| papermill: {duration: 0.996652, end_time: '2023-06-21T08:17:05.490293', exception: false, start_time: '2023-06-21T08:17:04.493641', status: completed}
+#| tags: []
+for c in categories:
+    urls = search_images(c + ' ' + suffix, max_images = 1)
+    dest = c + '.jpg'
+    download_url(urls[0], dest, show_progress=False)
+```
+
+```{python}
+#| execution: {iopub.execute_input: '2023-06-21T08:17:05.534486Z', iopub.status.busy: '2023-06-21T08:17:05.533604Z', iopub.status.idle: '2023-06-21T08:17:05.751379Z', shell.execute_reply: '2023-06-21T08:17:05.751842Z', shell.execute_reply.started: '2023-06-21T08:03:41.732377Z'}
+#| papermill: {duration: 0.24248, end_time: '2023-06-21T08:17:05.752012', exception: false, start_time: '2023-06-21T08:17:05.509532', status: completed}
+#| tags: []
+Image.open(categories[0] + '.jpg').to_thumb(256,256)
+```
+
+```{python}
+#| execution: {iopub.execute_input: '2023-06-21T08:17:05.799446Z', iopub.status.busy: '2023-06-21T08:17:05.798137Z', iopub.status.idle: '2023-06-21T08:17:05.876622Z', shell.execute_reply: '2023-06-21T08:17:05.877125Z', shell.execute_reply.started: '2023-06-21T08:03:45.038613Z'}
+#| papermill: {duration: 0.10437, end_time: '2023-06-21T08:17:05.877298', exception: false, start_time: '2023-06-21T08:17:05.772928', status: completed}
+#| tags: []
+Image.open(categories[1] + '.jpg').to_thumb(256,256)
+```
+
+```{python}
+#| execution: {iopub.execute_input: '2023-06-21T08:17:05.929818Z', iopub.status.busy: '2023-06-21T08:17:05.928981Z', iopub.status.idle: '2023-06-21T08:17:47.606773Z', shell.execute_reply: '2023-06-21T08:17:47.607263Z', shell.execute_reply.started: '2023-06-21T08:06:36.691899Z'}
+#| papermill: {duration: 41.707083, end_time: '2023-06-21T08:17:47.607425', exception: false, start_time: '2023-06-21T08:17:05.900342', status: completed}
+#| tags: []
+for c in categories:
+    dest = (path/c)
+    dest.mkdir(exist_ok=True, parents=True)
+    download_images(dest, urls=search_images(f'{c} photo'))
+    sleep(10)  # Pause between searches to avoid over-loading server
+    resize_images(path/c, max_size=400, dest=path/c)
+    
+# drop incomplete downloads
+failed = verify_images(get_image_files(path))
+failed.map(Path.unlink)
+len(failed)
+```
+
+## Step 2: Train our model
+
+To train a model, we'll need `DataLoaders`, which is an object that contains a *training set* (the images used to create a model) and a *validation set* (the images used to check the accuracy of a model -- not used during training). In `fastai` we can create that easily using a `DataBlock`, and view sample images from it:
+
+Here what each of the `DataBlock` parameters means:
+
+    blocks=(ImageBlock, CategoryBlock),
+
+The inputs to our model are images, and the outputs are categories (in this case, "bird" or "forest").
+
+    get_items=get_image_files, 
+
+To find all the inputs to our model, run the `get_image_files` function (which returns a list of all image files in a path).
+
+    splitter=RandomSplitter(valid_pct=0.2, seed=42),
+
+Split the data into training and validation sets randomly, using 20% of the data for the validation set.
+
+    get_y=parent_label,
+
+The labels (`y` values) is the name of the `parent` of each file (i.e. the name of the folder they're in, which will be *bird* or *forest*).
+
+    item_tfms=[Resize(192, method='squish')]
+
+Before training, resize each image to 192x192 pixels by "squishing" it (as opposed to cropping it).
+
+```{python}
+#| execution: {iopub.execute_input: '2023-06-21T08:17:47.808453Z', iopub.status.busy: '2023-06-21T08:17:47.807675Z', iopub.status.idle: '2023-06-21T08:17:51.884892Z', shell.execute_reply: '2023-06-21T08:17:51.885395Z', shell.execute_reply.started: '2023-06-21T08:09:51.676939Z'}
+#| papermill: {duration: 4.10964, end_time: '2023-06-21T08:17:51.885561', exception: false, start_time: '2023-06-21T08:17:47.775921', status: completed}
+#| tags: []
+dls = DataBlock(
+    blocks=(ImageBlock, CategoryBlock), 
+    get_items=get_image_files, 
+    splitter=RandomSplitter(valid_pct=0.2, seed=42),
+    get_y=parent_label,
+    item_tfms=[Resize(192, method='squish')]
+).dataloaders(path, bs=32)
+
+dls.show_batch(max_n=6)
+```
+
+Now we're ready to train our model. The fastest widely used computer vision model is `resnet18`. You can train this in a few minutes, even on a CPU! (On a GPU, it generally takes under 10 seconds...)
+
+`fastai` comes with a helpful `fine_tune()` method which automatically uses best practices for fine tuning a pre-trained model, so we'll use that.
+
+```{python}
+#| execution: {iopub.execute_input: '2023-06-21T08:17:52.020367Z', iopub.status.busy: '2023-06-21T08:17:52.019445Z', iopub.status.idle: '2023-06-21T08:18:02.615412Z', shell.execute_reply: '2023-06-21T08:18:02.614668Z', shell.execute_reply.started: '2023-06-21T08:11:14.367043Z'}
+#| papermill: {duration: 10.63294, end_time: '2023-06-21T08:18:02.615562', exception: false, start_time: '2023-06-21T08:17:51.982622', status: completed}
+#| tags: []
+learn = vision_learner(dls, resnet18, metrics=error_rate)
+learn.fine_tune(3)
+```
+
+"Fine-tuning" a model means that we're starting with a model someone else has trained using some other dataset (called the *pretrained model*), and adjusting the weights a little bit so that the model learns to recognise your particular dataset. In this case, the pretrained model was trained to recognise photos in *imagenet*, and widely-used computer vision dataset with images covering 1000 categories) For details on fine-tuning and why it's important, check out the [free fast.ai course](https://course.fast.ai/).
+
+## Step 3: Use our model 
+
+```{python}
+#| execution: {iopub.execute_input: '2023-06-21T08:18:02.841473Z', iopub.status.busy: '2023-06-21T08:18:02.840306Z', iopub.status.idle: '2023-06-21T08:18:03.058531Z', shell.execute_reply: '2023-06-21T08:18:03.057956Z', shell.execute_reply.started: '2023-06-21T08:15:42.929312Z'}
+#| papermill: {duration: 0.260966, end_time: '2023-06-21T08:18:03.058668', exception: false, start_time: '2023-06-21T08:18:02.797702', status: completed}
+#| tags: []
+pred,_,probs = learn.predict(PILImage.create('/kaggle/working/cannabis.jpg'))
+print(pred,_,probs)
+print(f"Predicted category: {pred}.")
+print(f"Probability: {probs[0]:.2f}")
+```
+
+Thanks to deep learning, computers can now do many things which seemed impossible just a few years ago, including [creating amazing artworks](https://openai.com/dall-e-2/), and [explaining jokes](https://www.datanami.com/2022/04/22/googles-massive-new-language-model-can-explain-jokes/). It's moving so fast that even experts in the field have trouble predicting how it's going to impact society in the coming years.
+
+## Further reading
+
+* https://docs.fast.ai/
+* https://timm.fast.ai/
+
+Useful tools:
+* [Pixspy](https://de.pixspy.com/)
+

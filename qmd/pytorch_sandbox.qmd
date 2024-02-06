@@ -1,0 +1,269 @@
+---
+title: "Fast AI"
+format: html
+editor: source
+editor_options: 
+  chunk_output_type: console
+engine: knitr
+---
+
+```{python}
+#| label: setup-py
+#| include: false
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import json
+
+from torchvision import models
+from torchvision import transforms
+from PIL import Image
+
+# dir(models)[0:10]
+
+labels = json.load(open("imagenet_class_index.json"))
+labels = [l[1] for l in labels.values()]
+```
+
+
+## Tensors
+
+```{python}
+
+torch.ones(5)
+torch.zeros(10)
+torch.tensor([1, 2, 3, 4, 5], dtype = int)
+torch.tensor([1, 2, 3, 4, 5], dtype = float)
+
+a = np.array(range(10))
+torch.from_numpy(a)
+```
+
+
+## Images
+
+Image pre-processing involves:
+
+* image resizing to 256 * 256
+* center cropping to 224 * 224
+* tensor conversion (involves re-scaling to 0 .. 1)
+* normalize to mean and standard deviation
+* unsqueeze the dimensions to become [1 * channels * height * width]
+
+```{python}
+
+tfm = transforms.Compose([
+ transforms.Resize(256)
+ , transforms.CenterCrop(224)
+ , transforms.ToTensor()
+ , transforms.Normalize(
+   mean = [0.485, 0.456, 0.406]
+   , std = [0.229, 0.224, 0.225]
+ )
+])
+```
+
+
+## Image classification with pre-trained models
+
+### AlexNet
+
+```{python}
+
+alexnet = models.alexnet(pretrained = True)
+# print(alexnet)
+```
+
+
+```{python}
+
+img = Image.open('dog.jpg')
+img_tfm = tfm(img)
+batch = torch.unsqueeze(img_tfm, 0)
+
+alexnet.eval()
+out = alexnet(batch)
+
+_, index = torch.max(out, 1)
+percentage = torch.nn.functional.softmax(out, dim = 1)[0] * 100
+
+print(
+  f'Class: {labels[index[0]]}\n' + 
+  f'Prob: {round(percentage[index[0]].item(), ndigits = 2)}'
+)
+
+_, indices = torch.sort(out, descending = True)
+[(labels[idx], round(percentage[idx].item(), ndigits = 2)) for idx in indices[0][:5]]
+```
+
+
+### ResNet
+
+```{python}
+
+resnet = models.resnet101(pretrained = True)
+resnet.eval()
+
+out = resnet(batch)
+
+_, index = torch.max(out, 1)
+percentage = torch.nn.functional.softmax(out, dim = 1)[0] * 100
+
+print(
+  f'Class: {labels[index[0]]}\n' + 
+  f'Prob: {round(percentage[index[0]].item(), ndigits = 2)}'
+)
+
+```
+
+
+### Model comparison
+
+* top-1 error
+* top-5 error
+* inference time CPU / GPU
+* model size
+
+
+## Semantic segmentation 
+
+Applications
+
+* autonomous driving
+* facial segmentation
+* indoor object segmentation (e.g. for augmented reality / virtual reality)
+* geo land sensing
+
+Inputs:
+
+* e.g. 3 channel RGB image, normalized by mean and standard deviation
+* input dimension is [batch size * channels * height * width]
+* output dimension is [batch size * no. of classes * height * width]
+
+
+### Fully Convolutional Network (FCN)
+
+```{python}
+
+fcn = models.segmentation.fcn_resnet101(pretrained = True)
+fcn.eval()
+```
+
+```{python}
+
+!wget -nv https://static.independent.co.uk/s3fs-public/thumbnails/image/2018/04/10/19/pinyon-jay-bird.jpg -O bird.png 
+img = Image.open('bird.png') 
+plt.imshow(img)
+plt.axis('off')
+plt.show()
+```
+
+```{python}
+
+inp = tfm(img).unsqueeze(0)
+out = fcn(inp)['out'] 
+# print(out.shape)
+
+# get max class label
+om = torch.argmax(out.squeeze(), dim = 0).detach().cpu().numpy() 
+print(om.shape)
+```
+
+```{python}
+def decode_segmap(image, nc = 21):
+  label_colors = np.array([
+    (0, 0, 0)             # 0 = background
+    , (128, 0, 0)         # 1 = aeroplane
+    , (0, 128, 0)         # 2 = bicycle
+    , (128, 128, 0)       # 3 = bird
+    , (0, 0, 128)         # 4 = boat
+    , (128, 0, 128)       # 5 = bottle
+    , (0, 128, 128)       # 6 = bus
+    , (128, 128, 128)     # 7 = car
+    , (64, 0, 0)          # 8 = cat
+    , (192, 0, 0)         # 9 = chair
+    , (64, 128, 0)        # 10 = cow
+    # 11=dining table, 12=dog, 13=horse, 14=motorbike, 15=person
+    , (192, 128, 0)
+    , (64, 0, 128)
+    , (192, 0, 128)
+    , (64, 128, 128)
+    , (192, 128, 128)
+    # 16=potted plant, 17=sheep, 18=sofa, 19=train, 20=tv/monitor
+    , (0, 64, 0)
+    , (128, 64, 0)
+    , (0, 192, 0)
+    , (128, 192, 0)
+    , (0, 64, 128)
+  ])
+
+  r = np.zeros_like(image).astype(np.uint8)
+  g = np.zeros_like(image).astype(np.uint8)
+  b = np.zeros_like(image).astype(np.uint8)
+  
+  for l in range(0, nc):
+    idx = image == l
+    r[idx] = label_colors[l, 0]
+    g[idx] = label_colors[l, 1]
+    b[idx] = label_colors[l, 2]
+    rgb = np.stack([r, g, b], axis = 2)
+    
+  return rgb
+
+rgb = decode_segmap(om)
+plt.imshow(rgb)
+plt.axis('off')
+plt.show()
+```
+
+```{python}
+def segment(net, path):
+  img = Image.open(path)
+  
+  plt.imshow(img)
+  plt.axis('off')
+  plt.show()
+  
+  inp = tfm(img).unsqueeze(0)
+  out = net(inp)['out']
+  om = torch.argmax(out.squeeze(), dim = 0).detach().cpu().numpy()
+  rgb = decode_segmap(om)
+  plt.imshow(rgb)
+  plt.axis('off')
+  plt.show()
+
+!wget -nv https://learnopencv.com/wp-content/uploads/2021/01/horse-segmentation.jpeg -O horse.png 
+segment(fcn, 'horse.png')
+```
+
+
+## DeepLab
+
+```{python}
+dlab = models.segmentation.deeplabv3_resnet101(pretrained = 1)
+dlab.eval()
+
+segment(dlab, 'horse.png')
+```
+
+```{python}
+!wget -nv "https://learnopencv.com/wp-content/uploads/2021/01/person-segmentation.jpeg" -O dog_park.png
+
+img = Image.open('dog_park.png')
+plt.imshow(img)
+plt.show()
+
+print ('Segmenatation Image on FCN')
+segment(fcn, path = 'dog_park.png')
+print ('Segmenatation Image on DeepLabv3')
+segment(dlab, path = 'dog_park.png')
+```
+
+
+
+
+## Resources
+
+* [Getting started with PyTorch](https://learnopencv.com/getting-started-with-pytorch/)
+

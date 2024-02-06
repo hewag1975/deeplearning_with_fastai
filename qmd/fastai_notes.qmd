@@ -1,0 +1,24 @@
+---
+title: "Fast AI"
+format: html
+editor: source
+editor_options: 
+  chunk_output_type: console
+engine: knitr
+---
+
+```{python}
+#| label: setup-py
+#| include: false
+
+import fastai
+import pandas as pd
+import numpy as np
+
+```
+
+
+## Tools to remember
+
+* notebook to presentation tool: RISE
+
